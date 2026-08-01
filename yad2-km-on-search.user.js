@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Yad2 – ק"מ ותצוגה מקדימה בדף החיפוש
 // @namespace    https://github.com/Ulitz/yad2-km
-// @version      3.0.0
+// @version      3.0.1
 // @description  Adds the odometer reading (km) to each car card on the Yad2 vehicles search page, and opens ads in an in-page preview instead of a new tab.
 // @author       Ulitz
 // @homepageURL  https://github.com/Ulitz/yad2-km
@@ -24,6 +24,11 @@
   if (window.top !== window.self) return;
 
   const DEBUG = false;
+
+  // Keep in step with @version above. Published on <html data-yad2-km="…"> so
+  // you can tell which build is actually running — after an auto-update, or
+  // when the dev loader is serving something other than what you think.
+  const VERSION = '3.0.1';
 
   // Both features are independent — flip either off without touching the rest.
   const KM_BADGES = true;
@@ -456,6 +461,7 @@
   // ================= boot =================
 
   function start() {
+    document.documentElement.dataset.yad2Km = VERSION;
     addStyles();
 
     if (KM_BADGES) {
