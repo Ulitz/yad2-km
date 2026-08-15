@@ -642,14 +642,15 @@
       /* The km-and-city pill on compact cards. A size down, and hard-capped at
          the width of the price box it sits in: a six-figure odometer next to a
          long city name ("130,000 ק"מ · ראשון לציון") overruns even at 11px, and
-         the card would clip it mid-word. An ellipsis at least looks deliberate. */
+         the card would clip it mid-word. An ellipsis at least looks deliberate,
+         and it eats the tail of the city rather than the odometer. */
       .${BADGE_CLASS}.${COMBO_CLASS} {
         max-width: 100%;
         box-sizing: border-box;
         overflow: hidden;
         text-overflow: ellipsis;
         font-size: 11px;
-        padding: 1px 7px;
+        padding: 1px 5px;
       }
 
       /* Deliberately quieter than the km pill: the odometer is what you scan
