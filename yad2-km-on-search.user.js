@@ -639,9 +639,15 @@
         vertical-align: middle;
       }
 
-      /* The km-and-city pill on compact cards: a size down, so the longest
-         reading we've measured ("155,000 ק"מ · ראשון לציון") still fits. */
+      /* The km-and-city pill on compact cards. A size down, and hard-capped at
+         the width of the price box it sits in: a six-figure odometer next to a
+         long city name ("130,000 ק"מ · ראשון לציון") overruns even at 11px, and
+         the card would clip it mid-word. An ellipsis at least looks deliberate. */
       .${BADGE_CLASS}.${COMBO_CLASS} {
+        max-width: 100%;
+        box-sizing: border-box;
+        overflow: hidden;
+        text-overflow: ellipsis;
         font-size: 11px;
         padding: 1px 7px;
       }
