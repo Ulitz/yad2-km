@@ -102,6 +102,7 @@
   const MAX_CONCURRENT = 3;
   const BADGE_CLASS = 'yad2-km-badge';
   const LOC_CLASS = 'yad2-loc-badge';
+  const COMBO_CLASS = 'yad2-badge-combo';
 
   // token -> { km: number|null, city: string|null }. A record whose `city` is
   // `undefined` came from a cache written before locations existed; `null`
@@ -235,16 +236,23 @@
     return cands.length ? cands[cands.length - 1] : null;
   }
 
+  // findAnchor only ever returns a price box for the compact carousel card, so
+  // that's what tells the two layouts apart here.
+  function isCompactRow(row) {
+    return /price/i.test(row.className || '');
+  }
+
   // One <span> per kind per row, reused across renders. The write is guarded
   // because the MutationObserver watches this subtree — an unconditional one
   // would re-trigger render forever.
-  function paintBadge(row, cls, text) {
+  function paintBadge(row, cls, text, mod) {
     let badge = row.querySelector(':scope > .' + cls);
     if (!badge) {
       badge = document.createElement('span');
-      badge.className = cls;
       row.appendChild(badge);
     }
+    const full = mod ? cls + ' ' + mod : cls;
+    if (badge.className !== full) badge.className = full;
     if (badge.textContent !== text) badge.textContent = text;
   }
 
@@ -280,11 +288,19 @@
       const row = findAnchor(link);
       if (!row) continue;
 
-      if (KM_BADGES && typeof info.km === 'number') {
-        paintBadge(row, BADGE_CLASS, info.km.toLocaleString('en-US') + ' ק"מ');
-      }
-      if (LOC_BADGES && info.city) {
-        paintBadge(row, LOC_CLASS, info.city);
+      const km = KM_BADGES && typeof info.km === 'number'
+        ? info.km.toLocaleString('en-US') + ' ק"מ'
+        : '';
+      const city = LOC_BADGES && info.city ? info.city : '';
+
+      // The compact card's price box is only ~170px wide: two separate pills
+      // wrap onto a second line there, and the card's fixed height then clips
+      // its own title. One combined pill fits on every listing we've seen.
+      if (km && city && isCompactRow(row)) {
+        paintBadge(row, BADGE_CLASS, km + ' · ' + city, COMBO_CLASS);
+      } else {
+        if (km) paintBadge(row, BADGE_CLASS, km);
+        if (city) paintBadge(row, LOC_CLASS, city);
       }
       shown++;
     }
@@ -621,6 +637,13 @@
         direction: rtl;
         white-space: nowrap;
         vertical-align: middle;
+      }
+
+      /* The km-and-city pill on compact cards: a size down, so the longest
+         reading we've measured ("155,000 ק"מ · ראשון לציון") still fits. */
+      .${BADGE_CLASS}.${COMBO_CLASS} {
+        font-size: 11px;
+        padding: 1px 7px;
       }
 
       /* Deliberately quieter than the km pill: the odometer is what you scan
