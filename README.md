@@ -1,8 +1,8 @@
 # yad2-km
 
-A Tampermonkey userscript for [Yad2](https://www.yad2.co.il)'s car search, which adds the two
-things the feed doesn't give you: **the odometer reading on every card**, and **a way to open an
-ad without spawning a tab**.
+A Tampermonkey userscript for [Yad2](https://www.yad2.co.il)'s car search, which adds the things
+the feed doesn't give you: **the odometer reading and the seller's city on every card**, and **a
+way to open an ad without spawning a tab**.
 
 Hebrew UI, RTL-aware.
 
@@ -11,6 +11,10 @@ Hebrew UI, RTL-aware.
 **km on every card.** The search feed shows year, hand and price, but never mileage — so
 comparing listings means opening each one. The script adds a `66,000 ק"מ` pill inline with the
 year/hand row.
+
+**Location on every card.** Same story: whether a car is a ten-minute drive or a three-hour one
+is only on the ad page. A `חיפה` pill sits next to the km pill. It costs no extra requests — both
+values are read out of the same fetch.
 
 **In-page preview.** Every card link on Yad2 carries `target="_blank"`, so a click costs you a
 tab. Clicking a card now opens the real ad page in an overlay: photos, price, specs, seller,
@@ -38,15 +42,18 @@ seconds. After that they're instant.
 
 ## Configuration
 
-Two flags at the top of the script:
+Four flags at the top of the script:
 
 ```js
 const KM_BADGES      = true;
+const LOC_BADGES     = true;
 const PREVIEW        = true;
 const FILTER_CHINESE = true;
 ```
 
-Set any to `false` to drop that feature. `DEBUG = true` turns on `[yad2-km]` console logging.
+Set any to `false` to drop that feature. Turning off just one of `KM_BADGES` / `LOC_BADGES` saves
+nothing in requests — they share a fetch — only the pill. `DEBUG = true` turns on `[yad2-km]`
+console logging.
 
 The hide-Chinese filter has one more switch, further down next to the brand lists:
 
@@ -63,24 +70,39 @@ kept **visible** by default, since most people don't think of them as Chinese ca
 ### Why it fetches one page per listing
 
 The search feed is server-rendered — Next.js App Router, RSC payload streamed into
-`self.__next_f` — and it carries no odometer value. The only related field in the search HTML is
-`isZeroKmCar`. There's no feed API to read instead: loading a search page fires **no**
-`gw.yad2.co.il` request for listings at all, and App Router emits no `__NEXT_DATA__`. The real
-number exists only on the ad page, where `"km":22900` appears exactly once in the inline payload.
+`self.__next_f` — and it carries neither the odometer nor the location. The only related field in
+the search HTML is `isZeroKmCar`. There's no feed API to read instead: loading a search page fires
+**no** `gw.yad2.co.il` request for listings at all, and App Router emits no `__NEXT_DATA__`. Both
+values exist only on the ad page, where `"km":22900` and
+`"city":{"id":"4000","text":"חיפה"}` each appear exactly once in the inline payload.
 
-So the script fetches each ad page once and caches the result in `localStorage` for 30 days — a
-listed car's odometer barely moves. Three requests run at a time, which is fast enough to feel
-immediate and gentle enough that Yad2's bot protection doesn't challenge the tab.
+So the script fetches each ad page once, reads both values out of that one response, and caches
+them in `localStorage` for 30 days — a listed car's odometer barely moves. Three requests run at a
+time, which is fast enough to feel immediate and gentle enough that Yad2's bot protection doesn't
+challenge the tab.
+
+Dealers who sell nationwide list no city at all, only an area, so the badge falls back to that —
+trimmed, since areas are phrased `אזור חיפה והסביבה` and on a card that's mostly filler. In the
+cache, a missing city is stored as `null` (looked, found nothing) and left absent when a fetch
+hasn't happened yet, which is what lets a pre-location cache refill itself without refetching the
+ads that genuinely have no city.
 
 ### The feed mixes card layouts
 
 Three components share one feed, and they need different treatment:
 
-| Layout | Where the badge goes | Why |
+| Layout | Where the badges go | Why |
 | --- | --- | --- |
 | Wide list card | the `yearAndHand` row | has room; reads as one more spec |
-| Compact carousel card | under the price box | its details line sits flush against a fixed-height `overflow: hidden` edge, so a badge there gets clipped by ~10px and looks missing |
+| Compact carousel card | under the price box, **merged into one pill** | its details line sits flush against a fixed-height `overflow: hidden` edge, so a badge there gets clipped by ~10px and looks missing |
 | Dealer / trade-in card | the `yearAndHand` row | same as wide, but the ad lives at a **bare `/item/<token>`** rather than `/vehicles/item/<token>` |
+
+The merge on compact cards isn't cosmetic. Its price box is ~168px wide, and two separate pills
+wrapped onto a second line on **half** the cards measured — which the card's fixed height then
+paid for by clipping its own title. One `32,000 ק"מ · נתניה` pill, a size down, fits on a single
+line every time; it's also capped at the width of the box and ellipsised, so the worst case is a
+six-figure odometer next to a long city name losing a character or two off the city (2 of 20 on
+the feed it was measured against) rather than being cut mid-word by the card.
 
 That last one matters: matching only `/vehicles/item/` silently skips every dealer and trade-in
 listing. Both shapes are accepted, and each ad's own path is carried through the fetch queue,
