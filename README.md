@@ -16,6 +16,10 @@ year/hand row.
 tab. Clicking a card now opens the real ad page in an overlay: photos, price, specs, seller,
 everything. `Esc`, the ✕, or a click outside closes it.
 
+**Hide Chinese cars.** Narrow the search to electric and the feed comes back mostly Chinese
+marques. A `הסתר רכבים סיניים` toggle appears next to the result count, hides them, shows how many
+it hid, and remembers the setting.
+
 Nothing you already rely on changes:
 
 - ⌘/Ctrl/Shift-click and middle-click still open a real tab
@@ -37,12 +41,22 @@ seconds. After that they're instant.
 Two flags at the top of the script:
 
 ```js
-const KM_BADGES = true;
-const PREVIEW   = true;
+const KM_BADGES      = true;
+const PREVIEW        = true;
+const FILTER_CHINESE = true;
 ```
 
-Set either to `false` to run just the other half. `DEBUG = true` turns on `[yad2-km]` console
-logging.
+Set any to `false` to drop that feature. `DEBUG = true` turns on `[yad2-km]` console logging.
+
+The hide-Chinese filter has one more switch, further down next to the brand lists:
+
+```js
+const ALSO_HIDE_CHINESE_OWNED = false;
+```
+
+Chinese-*owned* Western marques — Volvo and Polestar under Geely, Lotus, Smart, LEVC, Karma — are
+kept **visible** by default, since most people don't think of them as Chinese cars. Flip this to
+`true` to hide them as well, or just move individual names between the two lists.
 
 ## How it works
 
@@ -74,6 +88,32 @@ since the two are not interchangeable.
 
 Card hrefs are also *relative* (`item/abc123`), so the script matches on the resolved
 `a.pathname` — an attribute selector like `a[href*="/vehicles/item/"]` matches nothing.
+
+### Deciding what counts as a Chinese car
+
+The brand list covers all 126 manufacturers in Yad2's own manufacturer filter, classified into 47
+Chinese marques and 6 Chinese-owned Western ones. Every China verdict was checked against Israeli
+importer and registry sources, because Hebrew transliteration is lossy — `אס דאבל יו אמ` is a
+letter-by-letter reading of "SWM", `לינקסיס` is Wuling's Linxys, `ריהיי` is Dayun's ReHigh.
+
+Matching is on the **manufacturer name**, not Yad2's manufacturer id, even though the feed markup
+does carry `"manufacturer":{"id":141,"text":"בי.ווי.די"}`. That data is only correct for the
+document as first served and goes stale after client-side pagination — it kept insisting a page of
+MG and BYD listings was Toyota. The printed title never lies.
+
+Two details that would silently break it:
+
+- Names are compared as **whole-word prefixes**, never substrings, or `ניאו` (NIO) would hide any
+  model whose name contains those letters.
+- Hebrew punctuation is normalised first. Yad2 spells `צ׳רי` with a geresh (U+05F3) but `ג'אקו`
+  with an ASCII apostrophe, so a literal comparison misses half the list. Note that `ג'י.איי.סי`
+  (GAC) and `ג׳יי.איי.סי` (JAC) differ only by that character plus one yod.
+
+Judgment calls, recorded so they don't get "corrected" later: **MG** and **Maxus** are treated as
+Chinese despite British heritage, since today's cars are wholly SAIC-developed. **Lynk & Co** is
+too, even though its Israeli importer markets it as *המותג השוודי*. **Cenntro** is the weakest
+entry — Nasdaq-listed US parent, China-built vans. And **Dacia Spring** stays visible: it is
+China-built, but Dacia is not a Chinese marque.
 
 ### The preview
 

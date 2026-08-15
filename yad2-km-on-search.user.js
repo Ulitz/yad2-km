@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Yad2 – ק"מ ותצוגה מקדימה בדף החיפוש
 // @namespace    https://github.com/Ulitz/yad2-km
-// @version      3.0.1
-// @description  Adds the odometer reading (km) to each car card on the Yad2 vehicles search page, and opens ads in an in-page preview instead of a new tab.
+// @version      3.1.0
+// @description  Adds the odometer reading (km) to each car card on the Yad2 vehicles search page, opens ads in an in-page preview instead of a new tab, and can hide Chinese-brand cars.
 // @author       Ulitz
 // @homepageURL  https://github.com/Ulitz/yad2-km
 // @supportURL   https://github.com/Ulitz/yad2-km/issues
@@ -28,11 +28,12 @@
   // Keep in step with @version above. Published on <html data-yad2-km="…"> so
   // you can tell which build is actually running — after an auto-update, or
   // when the dev loader is serving something other than what you think.
-  const VERSION = '3.0.1';
+  const VERSION = '3.1.0';
 
-  // Both features are independent — flip either off without touching the rest.
+  // Each feature is independent — flip any off without touching the rest.
   const KM_BADGES = true;
   const PREVIEW = true;
+  const FILTER_CHINESE = true;
 
   const log = (...a) => DEBUG && console.log('[yad2-km]', ...a);
 
@@ -61,6 +62,28 @@
   function tokenOf(link) {
     const m = link.pathname.match(ITEM_PATH);
     return m ? m[1] : null;
+  }
+
+  // Card titles read "<manufacturer> <model>", but the three card layouts put
+  // that string in three different places — and the compact one has no <h2> at
+  // all, so anything keyed on <h2> silently skips a third of the feed.
+  function titleTextOf(link) {
+    const el =
+      link.querySelector('[class*="feed-item-info-section"][class*="head"]') ||
+      link.querySelector('[class*="heading-line"]') ||
+      link.querySelector('h2, h3');
+    return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+  }
+
+  // Yad2 is inconsistent about Hebrew punctuation: "צ׳רי" uses a geresh (U+05F3)
+  // while "דאצ'יה" uses a plain apostrophe, and quotes vary the same way. Compare
+  // everything through here or the two spellings never match.
+  function norm(s) {
+    return (s || '')
+      .replace(/[׳‘’ʼ]/g, "'")
+      .replace(/[״“”]/g, '"')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   // ================= km badges =================
@@ -175,8 +198,20 @@
   function render() {
     let shown = 0;
     let pending = 0;
+    let hidden = 0;
 
     for (const link of itemLinks()) {
+      if (FILTER_CHINESE) {
+        if (hideChinese && chineseBrandOf(link)) {
+          link.classList.add(HIDDEN_CLASS);
+          hidden++;
+          continue; // a hidden card shouldn't cost an odometer fetch either
+        }
+        link.classList.remove(HIDDEN_CLASS);
+      }
+
+      if (!KM_BADGES) continue;
+
       const token = tokenOf(link);
       if (!token) continue;
 
@@ -200,13 +235,182 @@
       shown++;
     }
 
-    log('rendered', shown, 'pending', pending);
+    if (FILTER_CHINESE) {
+      placeToggle();
+      paintToggle(hidden);
+    }
+
+    log('rendered', shown, 'pending', pending, 'hidden', hidden);
   }
 
   let renderTimer = null;
   function scheduleRender() {
     clearTimeout(renderTimer);
     renderTimer = setTimeout(render, 150);
+  }
+
+  // ================= hide Chinese-brand cars =================
+
+  // Filter the feed to electric and it comes back almost entirely Chinese. This
+  // hides those cards, matching on the manufacturer name Yad2 itself prints at
+  // the start of every card title.
+  //
+  // Matching is by name rather than by Yad2's manufacturer id: the feed markup
+  // that carries ids is only correct for the document as first served, and goes
+  // stale after client-side pagination — the printed title never does.
+  //
+  // Names below are Yad2's own spellings, lifted from its manufacturer filter
+  // (all 126 of them); the number is Yad2's manufacturer id, kept only so the
+  // list stays checkable against the site later.
+  //
+  // Four deliberate calls, noted so they don't get "corrected" later:
+  //   MG (6) and Maxus (89) are here despite British heritage — today's cars are
+  //     wholly SAIC-developed and China-built.
+  //   Lynk & Co (321) is here even though its Israeli importer markets it as
+  //     "המותג השוודי" and it is engineered in Gothenburg — it was founded in
+  //     China, by Geely, and is built there.
+  //   Cenntro (97) is the weakest entry: the parent is Nasdaq-listed and US-based,
+  //     but the Logistars sold in Israel are China-built.
+
+  const HIDE_KEY = 'yad2_hide_chinese';
+  const HIDDEN_CLASS = 'yad2-cn-hidden';
+
+  const CHINESE_BRANDS = [
+    'אווטאר',             // 338 Avatr
+    'אומודה',             // 369 Omoda
+    'אורה',               // 224 Ora
+    'אי.וי איזי',         // 323 EVEASY
+    'איוויס',             // 288 Aiways
+    'איון',               // 379 Aion
+    'איי אם',             // 374 IM Motors
+    "אם ג'י",             //   6 MG
+    'אס דאבל יו אמ',      // 345 SWM
+    'אקס אי וי',          // 335 XEV
+    'אקסיד',              // 349 Exeed
+    'אקספנג',             // 290 XPeng
+    'ארקפוקס',            // 117 Arcfox
+    'באייק',              // 126 BAIC
+    'בי.איי.דאבליו',      // 193 BAW
+    'בי.ווי.די',          // 141 BYD
+    "ג'אקו",              // 355 Jaecoo
+    "ג'י.איי.סי",         //  99 GAC
+    'גיאיוואן',           // 346 Jiayuan
+    'גרייט וול',          //  11 Great Wall (GWM)
+    'ג׳יי.איי.סי',        // 200 JAC
+    'ג׳ילי',              // 177 Geely
+    'דאבל יו אם מוטורס',  // 329 WM Motor (Weltmeister)
+    'דאיון',              // 360 Dayun
+    'דונגפנג',            //  88 Dongfeng
+    'דיפאל',              // 362 Deepal
+    "הונגצ'י",            // 301 Hongqi
+    'וויה',               // 322 Voyah
+    'ויי',                // 284 WEY
+    'זיקר',               // 333 Zeekr
+    'יודו',               // 357 Yudo
+    'לינק אנד קו',        // 321 Lynk & Co
+    'לינקסיס',            // 363 Linxys
+    'ליפמוטור',           // 320 Leapmotor
+    'מקסוס',              //  89 Maxus
+    'נטע',                // 348 Neta
+    'ניאו',               // 289 NIO
+    "ננג'ינג",            //  78 Nanjing
+    'סאנשיין',            //  56 Sunshine
+    'סנטרו',              //  97 Cenntro
+    'סקייוול',            // 300 Skywell
+    'סרס',                // 287 SERES
+    'פאריזון',            // 364 Farizon
+    'פוטון',              // 352 Foton
+    'פורתינג',            // 334 Forthing
+    'צ׳רי',               // 147 Chery
+    'ריהיי',              // 361 ReHigh
+  ];
+
+  // Chinese-OWNED, but Western marques still engineered outside China. Most
+  // people don't think of these as Chinese cars, so they stay visible unless you
+  // flip this to true.
+  const ALSO_HIDE_CHINESE_OWNED = false;
+
+  const CHINESE_OWNED_WESTERN = [
+    'וולוו',       //  18 Volvo    — Geely-owned, Swedish
+    'פולסטאר',     // 231 Polestar — Geely-owned, Swedish
+    'לוטוס',       //  22 Lotus    — Geely-owned, British
+    'סמארט',       //  39 Smart    — Geely/Mercedes JV
+    'אל.אי.וי.סי', // 299 LEVC     — Geely-owned, British
+    'קארמה',       // 203 Karma    — Wanxiang-owned, American
+  ];
+
+  let hideChinese = false;
+  let matchers = [];
+
+  function loadHidePref() {
+    try { hideChinese = localStorage.getItem(HIDE_KEY) === '1'; } catch (e) { hideChinese = false; }
+    const names = ALSO_HIDE_CHINESE_OWNED
+      ? CHINESE_BRANDS.concat(CHINESE_OWNED_WESTERN)
+      : CHINESE_BRANDS;
+    // Longest name first, so a short entry can't shadow a longer one that
+    // happens to start with it.
+    matchers = names.map(norm).sort((a, b) => b.length - a.length);
+  }
+
+  // Titles read "<manufacturer> <model>", so the manufacturer is always a
+  // whole-word prefix — never a substring test, or "ניאו" would swallow any
+  // model containing it.
+  function chineseBrandOf(link) {
+    const t = norm(titleTextOf(link));
+    if (!t) return null;
+    for (const b of matchers) {
+      if (t === b || t.startsWith(b + ' ')) return b;
+    }
+    return null;
+  }
+
+  // ---------- the toggle ----------
+
+  let toggle = null;
+
+  function buildToggle() {
+    toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'yad2-cn-toggle';
+    toggle.innerHTML =
+      '<span class="yad2-cn-box"></span>' +
+      '<span class="yad2-cn-text">הסתר רכבים סיניים</span>' +
+      '<span class="yad2-cn-count"></span>';
+    toggle.addEventListener('click', (e) => {
+      // The toggle lives inside Yad2's own sort bar; don't let the click reach
+      // whatever that bar does with clicks.
+      e.preventDefault();
+      e.stopPropagation();
+      hideChinese = !hideChinese;
+      try { localStorage.setItem(HIDE_KEY, hideChinese ? '1' : '0'); } catch (e) { /* private mode */ }
+      render();
+    });
+  }
+
+  function placeToggle() {
+    if (!toggle) buildToggle();
+    if (toggle.isConnected) return;
+    // It belongs beside the result count and sort control; if that bar isn't
+    // there, fall back to floating so the toggle is never unreachable.
+    const bar = document.querySelector('[class*="sortAndTotalBox"], [class*="sort-and-total"]');
+    if (bar) {
+      toggle.classList.remove('floating');
+      bar.appendChild(toggle);
+    } else {
+      toggle.classList.add('floating');
+      document.body.appendChild(toggle);
+    }
+  }
+
+  function paintToggle(hidden) {
+    if (!toggle) return;
+    toggle.classList.toggle('on', hideChinese);
+    toggle.setAttribute('aria-pressed', hideChinese ? 'true' : 'false');
+    const count = toggle.querySelector('.yad2-cn-count');
+    // Only write when it actually changes — the MutationObserver watches this
+    // subtree, and an unconditional write would re-trigger render forever.
+    const text = hideChinese && hidden ? '(' + hidden + ')' : '';
+    if (count.textContent !== text) count.textContent = text;
   }
 
   // ================= in-page preview =================
@@ -258,8 +462,7 @@
   }
 
   function titleOf(link) {
-    const h = link.querySelector('h2, h3');
-    return h ? h.textContent.replace(/\s+/g, ' ').trim() : 'מודעה';
+    return titleTextOf(link) || 'מודעה';
   }
 
   function openPreview(href, title) {
@@ -366,6 +569,66 @@
         vertical-align: middle;
       }
 
+      .${HIDDEN_CLASS} { display: none !important; }
+
+      .yad2-cn-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-inline-start: 12px;
+        padding: 5px 12px;
+        border: 1px solid #c9cdd4;
+        border-radius: 999px;
+        background: #fff;
+        color: #2b2f38;
+        font: inherit;
+        font-size: 14px;
+        line-height: 1.4;
+        direction: rtl;
+        white-space: nowrap;
+        vertical-align: middle;
+        cursor: pointer;
+      }
+      .yad2-cn-toggle:hover { border-color: #0d47a1; }
+      .yad2-cn-toggle.on {
+        border-color: #0d47a1;
+        background: #0d47a1;
+        color: #fff;
+      }
+      /* Physical right, not inset-inline-end: on this RTL page the logical
+         side is the left, where Yad2's accessibility button already sits. */
+      .yad2-cn-toggle.floating {
+        position: fixed;
+        bottom: 18px;
+        right: 18px;
+        z-index: 2147482000;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+      }
+      .yad2-cn-box {
+        flex: 0 0 auto;
+        position: relative;
+        width: 14px;
+        height: 14px;
+        border: 1.5px solid currentColor;
+        border-radius: 4px;
+      }
+      .yad2-cn-toggle.on .yad2-cn-box {
+        background: #fff;
+        border-color: #fff;
+      }
+      .yad2-cn-toggle.on .yad2-cn-box::after {
+        content: '';
+        position: absolute;
+        left: 4px;
+        top: 1px;
+        width: 3px;
+        height: 7px;
+        border: solid #0d47a1;
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+      }
+      .yad2-cn-count { opacity: 0.75; font-size: 13px; }
+
       html.${PV}-open { overflow: hidden !important; }
 
       .${PV} {
@@ -464,8 +727,10 @@
     document.documentElement.dataset.yad2Km = VERSION;
     addStyles();
 
-    if (KM_BADGES) {
-      loadCache();
+    if (KM_BADGES) loadCache();
+    if (FILTER_CHINESE) loadHidePref();
+
+    if (KM_BADGES || FILTER_CHINESE) {
       render();
       // The feed re-renders on filter changes and pagination, so re-apply on churn.
       new MutationObserver(scheduleRender).observe(document.body, {
