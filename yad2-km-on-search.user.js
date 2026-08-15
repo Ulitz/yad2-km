@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Yad2 – ק"מ ותצוגה מקדימה בדף החיפוש
 // @namespace    https://github.com/Ulitz/yad2-km
-// @version      3.1.0
-// @description  Adds the odometer reading (km) to each car card on the Yad2 vehicles search page, opens ads in an in-page preview instead of a new tab, and can hide Chinese-brand cars.
+// @version      3.2.0
+// @description  Adds the odometer reading (km) and the seller's city to each car card on the Yad2 vehicles search page, opens ads in an in-page preview instead of a new tab, and can hide Chinese-brand cars.
 // @author       Ulitz
 // @homepageURL  https://github.com/Ulitz/yad2-km
 // @supportURL   https://github.com/Ulitz/yad2-km/issues
@@ -28,10 +28,13 @@
   // Keep in step with @version above. Published on <html data-yad2-km="…"> so
   // you can tell which build is actually running — after an auto-update, or
   // when the dev loader is serving something other than what you think.
-  const VERSION = '3.1.0';
+  const VERSION = '3.2.0';
 
   // Each feature is independent — flip any off without touching the rest.
+  // KM_BADGES and LOC_BADGES share one fetch, so having both costs no more
+  // requests than having either.
   const KM_BADGES = true;
+  const LOC_BADGES = true;
   const PREVIEW = true;
   const FILTER_CHINESE = true;
 
@@ -86,18 +89,25 @@
       .trim();
   }
 
-  // ================= km badges =================
+  // ================= km + location badges =================
 
-  // Yad2's search feed is server-rendered and carries no odometer value — the
-  // page HTML only has "isZeroKmCar". The real number ("km":22900) exists only
-  // on each ad page, so we fetch ads lazily and cache what we learn.
+  // Yad2's search feed is server-rendered and carries neither the odometer nor
+  // the seller's location — the card markup has "isZeroKmCar" and nothing else.
+  // Both real values ("km":22900 and the address block) exist only on the ad
+  // page, so we fetch each ad lazily, read both out of the one response, and
+  // cache what we learn.
 
   const CACHE_KEY = 'yad2_km_cache_v2';
   const CACHE_TTL = 1000 * 60 * 60 * 24 * 30; // a listed car's odometer barely moves
   const MAX_CONCURRENT = 3;
   const BADGE_CLASS = 'yad2-km-badge';
+  const LOC_CLASS = 'yad2-loc-badge';
+  const COMBO_CLASS = 'yad2-badge-combo';
 
-  const kmByToken = new Map();
+  // token -> { km: number|null, city: string|null }. A record whose `city` is
+  // `undefined` came from a cache written before locations existed; `null`
+  // means we looked and the ad genuinely has none, so it isn't refetched.
+  const infoByToken = new Map();
   const requested = new Set();
   const queue = [];
   let inFlight = 0;
@@ -109,9 +119,14 @@
       const raw = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
       const now = Date.now();
       for (const [token, entry] of Object.entries(raw)) {
-        if (entry && typeof entry.km === 'number' && now - entry.t < CACHE_TTL) {
-          kmByToken.set(token, entry.km);
-        }
+        if (!entry || now - entry.t >= CACHE_TTL) continue;
+        if (typeof entry.km !== 'number' && entry.km !== null) continue;
+        infoByToken.set(token, {
+          km: entry.km,
+          // Keep undefined distinct from null: pre-3.2.0 entries have no city
+          // key at all, and those we do want to fetch again.
+          city: typeof entry.city === 'string' || entry.city === null ? entry.city : undefined,
+        });
       }
     } catch (e) { /* corrupt cache isn't worth crashing over */ }
   }
@@ -123,7 +138,12 @@
       try {
         const now = Date.now();
         const out = {};
-        for (const [token, km] of kmByToken) out[token] = { km, t: now };
+        // An undefined city is dropped by JSON.stringify and reads back as
+        // undefined, which is what we want: a fetch that hasn't happened yet
+        // (or failed) must not be recorded as "this ad has no city".
+        for (const [token, info] of infoByToken) {
+          out[token] = { km: info.km, city: info.city, t: now };
+        }
         localStorage.setItem(CACHE_KEY, JSON.stringify(out));
       } catch (e) { /* quota — we'll just refetch next visit */ }
     }, 800);
@@ -134,10 +154,29 @@
   // Carry the ad's own path — dealer ads live at /item/<token>, private ones at
   // /vehicles/item/<token>, and the two are not interchangeable.
   function enqueue(token, path) {
-    if (requested.has(token) || kmByToken.has(token)) return;
+    if (requested.has(token)) return;
+    const known = infoByToken.get(token);
+    if (known && known.city !== undefined) return;
     requested.add(token);
     queue.push({ token, path });
     pump();
+  }
+
+  // The ad payload is sometimes plain JSON and sometimes JSON embedded in a JS
+  // string, so every quote may or may not be backslash-escaped — hence the
+  // \\? before each one.
+  const KM_RE = /\\?"km\\?"\s*:\s*(\d{1,7})/;
+  const CITY_RE = /\\?"city\\?"\s*:\s*\{[^}]{0,160}?\\?"text\\?"\s*:\s*\\?"([^"\\]{1,40})/;
+  const AREA_RE = /\\?"area\\?"\s*:\s*\{[^}]{0,160}?\\?"text\\?"\s*:\s*\\?"([^"\\]{1,60})/;
+
+  // Dealers selling nationwide list no city at all — only an area, which for
+  // them reads "כל הארץ". That's worth showing, so fall back to it.
+  function cityOf(html) {
+    const city = html.match(CITY_RE);
+    if (city) return city[1];
+    const area = html.match(AREA_RE);
+    // Areas are phrased "אזור חיפה והסביבה"; on a card that's all filler.
+    return area ? area[1].replace(/^אזור\s+/, '').replace(/\s+והסביבה$/, '').trim() : null;
   }
 
   function pump() {
@@ -149,15 +188,17 @@
       fetch(path, { credentials: 'include' })
         .then((r) => (r.ok ? r.text() : ''))
         .then((html) => {
-          // The ad page embeds its RSC payload inline; "km" appears exactly once.
-          const m = html.match(/\\?"km\\?"\s*:\s*(\d{1,7})/);
-          if (m) {
-            kmByToken.set(token, parseInt(m[1], 10));
-            saveCache();
-            render();
-          } else {
-            log('no km for', token);
+          // The ad page embeds its RSC payload inline; "km" appears exactly
+          // once, and so does the address block it sits near.
+          const m = html.match(KM_RE);
+          const info = { km: m ? parseInt(m[1], 10) : null, city: cityOf(html) };
+          if (info.km === null && info.city === null) {
+            log('nothing found for', token);
+            return;
           }
+          infoByToken.set(token, info);
+          saveCache();
+          render();
         })
         .catch((e) => log('fetch failed', token, e))
         .finally(() => {
@@ -195,6 +236,26 @@
     return cands.length ? cands[cands.length - 1] : null;
   }
 
+  // findAnchor only ever returns a price box for the compact carousel card, so
+  // that's what tells the two layouts apart here.
+  function isCompactRow(row) {
+    return /price/i.test(row.className || '');
+  }
+
+  // One <span> per kind per row, reused across renders. The write is guarded
+  // because the MutationObserver watches this subtree — an unconditional one
+  // would re-trigger render forever.
+  function paintBadge(row, cls, text, mod) {
+    let badge = row.querySelector(':scope > .' + cls);
+    if (!badge) {
+      badge = document.createElement('span');
+      row.appendChild(badge);
+    }
+    const full = mod ? cls + ' ' + mod : cls;
+    if (badge.className !== full) badge.className = full;
+    if (badge.textContent !== text) badge.textContent = text;
+  }
+
   function render() {
     let shown = 0;
     let pending = 0;
@@ -210,28 +271,37 @@
         link.classList.remove(HIDDEN_CLASS);
       }
 
-      if (!KM_BADGES) continue;
+      if (!KM_BADGES && !LOC_BADGES) continue;
 
       const token = tokenOf(link);
       if (!token) continue;
 
-      const km = kmByToken.get(token);
-      if (km === undefined) {
-        enqueue(token, link.pathname);
+      const info = infoByToken.get(token);
+      // A pre-3.2.0 cache entry has a km but no city — show the km straight
+      // away and let the refetch fill the location in behind it.
+      if (!info || info.city === undefined) enqueue(token, link.pathname);
+      if (!info) {
         pending++;
         continue;
       }
 
       const row = findAnchor(link);
       if (!row) continue;
-      let badge = row.querySelector(':scope > .' + BADGE_CLASS);
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = BADGE_CLASS;
-        row.appendChild(badge);
+
+      const km = KM_BADGES && typeof info.km === 'number'
+        ? info.km.toLocaleString('en-US') + ' ק"מ'
+        : '';
+      const city = LOC_BADGES && info.city ? info.city : '';
+
+      // The compact card's price box is only ~170px wide: two separate pills
+      // wrap onto a second line there, and the card's fixed height then clips
+      // its own title. One combined pill fits on every listing we've seen.
+      if (km && city && isCompactRow(row)) {
+        paintBadge(row, BADGE_CLASS, km + ' · ' + city, COMBO_CLASS);
+      } else {
+        if (km) paintBadge(row, BADGE_CLASS, km);
+        if (city) paintBadge(row, LOC_CLASS, city);
       }
-      const text = km.toLocaleString('en-US') + ' ק"מ';
-      if (badge.textContent !== text) badge.textContent = text;
       shown++;
     }
 
@@ -569,6 +639,37 @@
         vertical-align: middle;
       }
 
+      /* The km-and-city pill on compact cards. A size down, and hard-capped at
+         the width of the price box it sits in: a six-figure odometer next to a
+         long city name ("130,000 ק"מ · ראשון לציון") overruns even at 11px, and
+         the card would clip it mid-word. An ellipsis at least looks deliberate,
+         and it eats the tail of the city rather than the odometer. */
+      .${BADGE_CLASS}.${COMBO_CLASS} {
+        max-width: 100%;
+        box-sizing: border-box;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 11px;
+        padding: 1px 5px;
+      }
+
+      /* Deliberately quieter than the km pill: the odometer is what you scan
+         for, the city is what you check once something looks interesting. */
+      .${LOC_CLASS} {
+        display: inline-block;
+        margin-inline-start: 6px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        border: 1px solid #d7dbe3;
+        background: #eef1f6;
+        color: #3b414d;
+        font-size: 12px;
+        font-weight: 600;
+        direction: rtl;
+        white-space: nowrap;
+        vertical-align: middle;
+      }
+
       .${HIDDEN_CLASS} { display: none !important; }
 
       .yad2-cn-toggle {
@@ -727,10 +828,10 @@
     document.documentElement.dataset.yad2Km = VERSION;
     addStyles();
 
-    if (KM_BADGES) loadCache();
+    if (KM_BADGES || LOC_BADGES) loadCache();
     if (FILTER_CHINESE) loadHidePref();
 
-    if (KM_BADGES || FILTER_CHINESE) {
+    if (KM_BADGES || LOC_BADGES || FILTER_CHINESE) {
       render();
       // The feed re-renders on filter changes and pagination, so re-apply on churn.
       new MutationObserver(scheduleRender).observe(document.body, {
